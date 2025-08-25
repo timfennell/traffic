@@ -1,0 +1,21 @@
+[Unit]
+Description=Traffic Logger Master Service Dispatcher
+After=network-online.target
+
+[Service]
+# Run as the normal 'traffic' user
+User=traffic
+Group=traffic
+
+WorkingDirectory=/home/traffic/traffic
+
+# --- THE DEFINITIVE FIX ---
+# This forces systemd to start a BASH LOGIN shell (-l).
+# A login shell automatically sources the user's ~/.profile and ~/.bashrc,
+# which sets up the complex environment variables needed by the Hailo SDK.
+ExecStart=/bin/bash -l -c '/home/traffic/traffic/run.sh'
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

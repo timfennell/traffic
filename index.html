@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Logger Control</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f0f2f5; margin: 0; padding: 15px; color: #333; -webkit-user-select: none; user-select: none; }
+        .container { max-width: 1280px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #1c1e21; text-align: center; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-top: 30px; }
+        h1 { margin-top: 0; }
+        .video-container { position: relative; width: 100%; max-width: 1280px; margin: 20px auto; border: 1px solid #ccc; background-color: #000; min-height: 480px; }
+        #video-stream { display: block; width: 100%; height: auto; }
+        #grid-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
+        .controls, .metadata, .actions { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; align-items: flex-start; margin-top: 20px; padding: 10px; }
+        .control-group { display: flex; flex-direction: column; align-items: center; text-align: center; }
+        button { background-color: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        .start-btn { background-color: #28a745; }
+        .start-btn:hover { background-color: #218838; }
+        button:disabled { background-color: #a0a0a0; color: #e0e0e0; cursor: not-allowed; }
+        label { font-weight: bold; margin-bottom: 8px; }
+        input[type="text"], textarea, select { width: 250px; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+        .status { margin-top: 20px; font-weight: bold; color: #555; height: 20px; text-align: center; transition: color 0.3s; }
+        .instructions { max-width: 400px; text-align: center; color: #666; font-style: italic; }
+        .gps-group, .time-group { display: flex; gap: 10px; align-items: center; }
+        #time-sync-status { font-style: italic; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Traffic Logger Control Center</h1>
+        <h2>Deployment Setup</h2>
+        <div class="video-container">
+            <img id="video-stream" src="" alt="Camera feed is loading...">
+            <canvas id="grid-canvas"></canvas>
+        </div>
+        <div class="controls">
+            <div class="control-group">
+                <label>Paint Brush:</label>
+                <select id="brush-select">
+                    <option value="1">Road (Track)</option>
+                    <option value="2">Sidewalk (Track)</option>
+                    <option value="3">Bike Lane (Track)</option>
+                    <option value="0" selected>Ignore Area (Grey)</option>
+                </select>
+            </div>
+            <div class="instructions">
+                Click or drag on the grid to paint zones.
+            </div>
+            <button id="clear-grid-btn">Clear Entire Grid</button>
+        </div>
+         <div class="metadata">
+            <div class="control-group">
+                <label>System Time Sync</label>
+                <div id="time-sync-status">Syncing with browser...</div>
+            </div>
+            <div class="control-group">
+                <label>GPS Location</label>
+                <div class="gps-group">
+                    <input type="text" id="lat-input" placeholder="Latitude">
+                    <input type="text" id="lon-input" placeholder="Longitude">
+                </div>
+                <button id="gps-btn" style="margin-top: 10px;">Attempt Auto-GPS</button>
+            </div>
+            <div class="control-group">
+                <label for="bearing-input">Camera Bearing (0-359°):</label>
+                <input type="text" id="bearing-input" placeholder="e.g., 270 for West">
+            </div>
+            <div class="control-group">
+                <label for="notes-input">Location Notes:</label>
+                <textarea id="notes-input" placeholder="Facing West on Main St..."></textarea>
+            </div>
+            <div class="control-group">
+                <label for="deep-sleep-checkbox">Enable Nightly Deep Sleep?</label>
+                <input type="checkbox" id="deep-sleep-checkbox" style="transform: scale(1.5); margin-top: 5px;">
+                <p style="font-size: 12px; font-style: italic; color: #666; max-width: 250px; margin-top: 10px;">
+                    <strong>Warning:</strong> If checked, the device will NOT collect any data between 1:00 AM and 5:00 AM to significantly extend battery life.
+                </p>
+            </div>
+        </div>
+        <div class="actions">
+             <button id="save-settings-btn">1. Save New Settings</button>
+             <button id="start-new-logging-btn" class="start-btn">2. Start Logging with these New Settings</button>
+             <button id="continue-logging-btn" class="start-btn" style="background-color: #ffc107; color: black;">Continue Latest Logging Session</button>
+        </div>
+        <div id="status-log" class="status">System Ready.</div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Element References ---
+            const canvas = document.getElementById('grid-canvas');
+            const ctx = canvas.getContext('2d');
+            const videoImage = document.getElementById('video-stream');
+            const statusLog = document.getElementById('status-log');
+            const saveBtn = document.getElementById('save-settings-btn');
+            const gpsBtn = document.getElementById('gps-btn');
+            const latInput = document.getElementById('lat-input');
+            const lonInput = document.getElementById('lon-input');
+            const clearGridBtn = document.getElementById('clear-grid-btn');
+            const brushSelect = document.getElementById('brush-select');
+            const startNewLoggingBtn = document.getElementById('start-new-logging-btn');
+            const continueLoggingBtn = document.getElementById('continue-logging-btn');
+            const timeSyncStatus = document.getElementById('time-sync-status');
+
+            // --- Grid State & other variables ---
+            const GRID_COLS = {{ grid_cols }};
+            const GRID_ROWS = {{ grid_rows }};
+            let maskGrid = Array(GRID_ROWS).fill().map(() => Array(GRID_COLS).fill(0));
+            let isPainting = false;
+            const ZONE_COLORS = { '0': 'rgba(108, 117, 125, 0.5)', '1': 'rgba(0, 123, 255, 0.4)', '2': 'rgba(40, 167, 69, 0.4)', '3': 'rgba(255, 193, 7, 0.4)' };
+            let mostRecentSavedFolder = '';
+
+            // --- Canvas & Drawing Functions ---
+            function resizeCanvas() {
+                canvas.width = videoImage.clientWidth;
+                canvas.height = videoImage.clientHeight;
+                drawGrid();
+            }
+            function drawGrid() { if (!ctx) return; ctx.clearRect(0, 0, canvas.width, canvas.height); const cellWidth = canvas.width / GRID_COLS; const cellHeight = canvas.height / GRID_ROWS; for (let r = 0; r < GRID_ROWS; r++) { for (let c = 0; c < GRID_COLS; c++) { ctx.fillStyle = ZONE_COLORS[maskGrid[r][c]]; ctx.fillRect(c * cellWidth, r * cellHeight, cellWidth, cellHeight); ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'; ctx.strokeRect(c * cellWidth, r * cellHeight, cellWidth, cellHeight); } } }
+            function getCellFromCoordinates(e) { const rect = canvas.getBoundingClientRect(); const x = e.touches ? e.touches[0].clientX - rect.left : e.clientX - rect.left; const y = e.touches ? e.touches[0].clientY - rect.top : e.clientY - rect.top; return { col: Math.floor(x / (canvas.width / GRID_COLS)), row: Math.floor(y / (canvas.height / GRID_ROWS)) }; }
+            function paintCell(e) { e.preventDefault(); if (!isPainting && e.type !== 'mousedown' && e.type !== 'touchstart') return; const { col, row } = getCellFromCoordinates(e); if (row >= 0 && row < GRID_ROWS && col >= 0 && col < GRID_COLS) { maskGrid[row][col] = parseInt(brushSelect.value, 10); drawGrid(); } }
+            function startPainting(e) { isPainting = true; paintCell(e); }
+            function stopPainting() { isPainting = false; }
+            
+            // --- PERIODIC IMAGE REFRESH FUNCTION ---
+            function refreshImage() {
+                videoImage.src = `/capture_photo?timestamp=${new Date().getTime()}`;
+            }
+            
+            // --- AUTOMATIC TIME SYNC FUNCTION ---
+            async function autoSyncTime() {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                const seconds = String(now.getSeconds()).padStart(2, '0');
+                const dateTimeString = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                
+                timeSyncStatus.textContent = 'Syncing...';
+                try {
+                    const response = await fetch('/set_time', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ datetime: dateTimeString })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        timeSyncStatus.textContent = 'Sync Complete!';
+                        timeSyncStatus.style.color = '#28a745';
+                    } else {
+                        timeSyncStatus.textContent = `Sync Failed: ${result.message}`;
+                        timeSyncStatus.style.color = '#dc3545';
+                    }
+                } catch (error) {
+                    timeSyncStatus.textContent = 'Sync Error: Could not connect.';
+                    timeSyncStatus.style.color = '#dc3545';
+                }
+            }
+
+            // --- Event Listeners ---
+            canvas.addEventListener('mousedown', startPainting);
+            canvas.addEventListener('mousemove', paintCell);
+            document.addEventListener('mouseup', stopPainting);
+            canvas.addEventListener('touchstart', startPainting, { passive: false });
+            canvas.addEventListener('touchmove', paintCell, { passive: false });
+            document.addEventListener('touchend', stopPainting);
+
+            gpsBtn.addEventListener('click', () => { statusLog.textContent = 'Requesting GPS from browser...'; if (navigator.geolocation) { navigator.geolocation.getCurrentPosition( (position) => { latInput.value = position.coords.latitude.toFixed(6); lonInput.value = position.coords.longitude.toFixed(6); statusLog.textContent = 'GPS Acquired automatically!'; statusLog.style.color = '#28a745'; }, () => { statusLog.textContent = 'Auto-GPS failed. Please enter manually.'; statusLog.style.color = '#dc3545'; } ); } else { statusLog.textContent = 'Geolocation is not supported by this browser.'; statusLog.style.color = '#dc3545'; } });
+            
+            saveBtn.addEventListener('click', async () => {
+                statusLog.textContent = 'Saving settings to USB drive...';
+                const deploymentData = {
+                    notes: document.getElementById('notes-input').value,
+                    bearing: document.getElementById('bearing-input').value,
+                    mask: maskGrid,
+                    gps: { lat: latInput.value, lon: lonInput.value },
+                    deep_sleep_enabled: document.getElementById('deep-sleep-checkbox').checked
+                };
+                const response = await fetch('/save_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(deploymentData)
+                });
+                const result = await response.json();
+                statusLog.textContent = result.message;
+                statusLog.style.color = result.success ? '#28a745' : '#dc3545';
+                if (result.success) {
+                    mostRecentSavedFolder = result.new_folder;
+                    startNewLoggingBtn.disabled = false;
+                }
+            });
+
+            startNewLoggingBtn.addEventListener('click', () => {
+                if (!mostRecentSavedFolder) {
+                    alert('You must save settings first to create a new deployment folder.');
+                    return;
+                }
+                const folderName = mostRecentSavedFolder.split('/').pop();
+                if (confirm(`This will start logging in the new folder: ${folderName}.\nThe web UI will become unavailable. Are you sure?`)) {
+                    fetch('/switch_to_logger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ folder: mostRecentSavedFolder })
+                    });
+                    statusLog.textContent = 'Switching to Logger Mode... The page will stop responding.';
+                }
+            });
+
+            const latestFolderFromServer = '{{ latest_deployment_folder }}';
+            if (!latestFolderFromServer) {
+                continueLoggingBtn.style.display = 'none';
+            }
+            continueLoggingBtn.addEventListener('click', () => {
+                const folderName = latestFolderFromServer.split('/').pop();
+                if (confirm(`This will continue logging in the most recent session: ${folderName}.\nThe web UI will become unavailable. Are you sure?`)) {
+                    fetch('/switch_to_logger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ folder: latestFolderFromServer })
+                    });
+                    statusLog.textContent = 'Switching to Logger Mode... The page will stop responding.';
+                }
+            });
+
+            clearGridBtn.addEventListener('click', () => {
+                if (confirm('Are you sure you want to clear the grid? This will set all squares to IGNORE.')) {
+                    maskGrid = Array(GRID_ROWS).fill().map(() => Array(GRID_COLS).fill(0));
+                    drawGrid();
+                }
+            });
+            
+            // --- Initial Setup ---
+            startNewLoggingBtn.disabled = true;
+            videoImage.onload = () => { resizeCanvas(); };
+            window.addEventListener('resize', resizeCanvas);
+            
+            autoSyncTime();
+            refreshImage(); // Get the first image immediately
+            setInterval(refreshImage, 5000); // And then refresh every 5 seconds
+        });
+    </script>
+</body>
+</html>

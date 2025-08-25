@@ -1,0 +1,8 @@
+
+        --- START OF FILE requirements.txt ---
+
+flask
+pyserial
+numpy
+opencv-python
+hailo-sdk-client
